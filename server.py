@@ -30,6 +30,11 @@ organizations = DiskMap(config.organizations_db, readonly=True)
 datasetmetadata = DiskMap(config.datasetmetadata_db, readonly=True)
 occurrences = DiskMap(config.occurrences_db, readonly=True, cache=False)
 
+occurrences_to_dataId = {}
+for dataId, value in matcit_per_institutions.items():
+    for matcitKey in value["data"].keys():
+        occurrences_to_dataId[matcitKey] = dataId
+
 
 APP_DEBUG = True
 app = Flask(__name__)
@@ -396,7 +401,7 @@ class api_matching_data(Resource):
             response.status_code = 404
             return response
 
-        data = matcit_per_institutions[dataId]
+        data = {**matcit_per_institutions[dataId]}
         materialCitationKeyList = data["data"].keys()
         output = {
             str(k): {
@@ -412,18 +417,22 @@ class api_matching_data(Resource):
             select(MaterialCitation).where(MaterialCitation.materialCitationKey.in_(materialCitationKeyList))
         ).all()
         for item in result:
-            output[str(item[0].materialCitationKey)] = {"done": item[0]["done"]}
+            output[str(item[0].materialCitationKey)]["done"] = item[0].done
         result: List[Matching] = db.session.execute(
             select(Matching).where(Matching.materialCitationKey.in_(materialCitationKeyList))
         ).all()
         for item in result:
             item0 = item[0]
-            o = output[str(item[0].materialCitationKey)]["institutionOccurrences"].setdefault(
-                str(item0.specimenKey), {"unknown": True}
+            o = output[str(item0.materialCitationKey)]["institutionOccurrences"].setdefault(
+                str(item0.specimenKey), {"not_related": True}
             )
-            o["match"] = item0.match
-            o["comment"] = item0.comment
-            o["timestamp"] = int(item0.timestamp.timestamp())
+            o.update(
+                {
+                    "match": item0.match,
+                    "comment": item0.comment,
+                    "timestamp": int(item0.timestamp.timestamp()),
+                }
+            )
         return jsonify(output)
 
 
@@ -494,6 +503,14 @@ class api_matching_matcit(Resource):
 
 @api_v1_matching.route("/materialcitation/<materialCitationKey>/specimen/<specimenKey>")
 class api_matching_matcit_specimen(Resource):
+    def _check_parameters(self, materialCitationKey, specimenKey):
+        if materialCitationKey not in occurrences_to_dataId:
+            return "materialCitationKey doesn't exist"
+        specimens = matcit_per_institutions[occurrences_to_dataId[materialCitationKey]]["data"][matcit_per_institutions]
+        if specimenKey not in specimens:
+            return "specimenKey is not related to materialCitationKey"
+        return None
+
     @api_v1_matching.doc(
         model=model_matching_matching,
         description='Get the "match" value between a material citation and a specimen',
@@ -501,6 +518,10 @@ class api_matching_matcit_specimen(Resource):
     @api_v1_matching.response(404, "Not found")
     @api_v1_matching.response(500, "Internal error")
     def get(self, materialCitationKey, specimenKey):
+        errorMsg = self._check_parameters(materialCitationKey, specimenKey)
+        if errorMsg:
+            return errorMsg, 404
+
         result = db.session.execute(
             select(Matching).where(
                 Matching.materialCitationKey == materialCitationKey and Matching.specimenKey == specimenKey
@@ -526,11 +547,16 @@ class api_matching_matcit_specimen(Resource):
     )
     @api_v1_matching.response(500, "Internal error")
     def put(self, materialCitationKey, specimenKey):
+        errorMsg = self._check_parameters(materialCitationKey, specimenKey)
+        if errorMsg:
+            return errorMsg, 404
+
         m = Matching(
             materialCitationKey=materialCitationKey,
             specimenKey=specimenKey,
             **request.json,
         )
+        m.timestamp = datetime.now()
         db.session.execute(
             delete(Matching).where(
                 Matching.materialCitationKey == materialCitationKey and Matching.specimenKey == specimenKey
@@ -545,6 +571,10 @@ class api_matching_matcit_specimen(Resource):
     )
     @api_v1_matching.response(500, "Internal error")
     def delete(self, materialCitationKey, specimenKey):
+        errorMsg = self._check_parameters(materialCitationKey, specimenKey)
+        if errorMsg:
+            return errorMsg, 404
+
         db.session.execute(
             delete(Matching).where(
                 Matching.materialCitationKey == materialCitationKey and Matching.specimenKey == specimenKey
@@ -553,9 +583,9 @@ class api_matching_matcit_specimen(Resource):
         db.session.commit()
 
 
-@app.route('/')
+@app.route("/")
 def index():
-    return redirect('/v1', 308)
+    return redirect("/v1", 308)
 
 
 if __name__ == "__main__":
