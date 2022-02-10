@@ -16,30 +16,37 @@ def normalize_occurrence(occurrence):
             occurrence[key] = ""
     for key in INT_DISTANCE:
         if key not in occurrence:
-            occurrence[key] = 0
+            occurrence[key] = None
     for key in FLOAT_DISTANCE:
         if key not in occurrence:
-            occurrence[key] = 0.0
-        if occurrence[key] is None:
-            pass
-        elif not isinstance(occurrence[key], float):
+            occurrence[key] = None
+        if occurrence[key] is not None and not isinstance(occurrence[key], float):
             occurrence[key] = float(occurrence[key])
 
     # normalize value
     for key in ["decimalLongitude", "decimalLatitude"]:
         if occurrence[key] in [360, 0]:
             occurrence[key] = None
-    if occurrence["elevation"] < -6000000:
+    if occurrence.get("elevation", 0) and occurrence["elevation"] < -6000000:
         occurrence["elevation"] = None
 
 
 def get_string_distance_for_column(matcit, institution_occurrences, column_name):
     candidates = [o[column_name] for o in institution_occurrences]
-    exportable_model = bjw.build_exportable_model(candidates)
-    runtime_model = bjw.build_runtime_model(exportable_model)
     ref_value = matcit[column_name]
+
+    index = {}
+    for i, c in enumerate(candidates):
+        index.setdefault(c, []).append(i)
+    exportable_model = bjw.build_exportable_model(list(index.keys()))
+    runtime_model = bjw.build_runtime_model(exportable_model)
     res = bjw.jaro_winkler_distance(runtime_model, ref_value)
-    return [distance for (_canditate, distance) in res]
+
+    result = [None] * len(candidates)
+    for canditate, distance in res:
+        for i in index[canditate]:
+            result[i] = distance
+    return result
 
 
 def get_numeric_distance_for_column(matcit, institution_occurrences, column_name):
