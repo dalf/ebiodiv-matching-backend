@@ -467,26 +467,30 @@ class api_matching_data(Resource):
             }
             for k, v in data["data"].items()
         }
-        result = db.session.execute(
-            select(MaterialCitation).where(MaterialCitation.materialCitationKey.in_(materialCitationKeyList))
-        ).all()
-        for item in result:
-            output[str(item[0].materialCitationKey)]["done"] = item[0].done
-        result: List[Matching] = db.session.execute(
-            select(Matching).where(Matching.materialCitationKey.in_(materialCitationKeyList))
-        ).all()
-        for item in result:
-            item0 = item[0]
-            o = output[str(item0.materialCitationKey)]["institutionOccurrences"].setdefault(
-                str(item0.specimenKey), {"not_related": True}
-            )
-            o.update(
-                {
-                    "match": item0.match,
-                    "comment": item0.comment,
-                    "timestamp": int(item0.timestamp.timestamp()),
-                }
-            )
+        # avoid sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) too many SQL variables
+        # see https://www.sqlite.org/limits.html : sqlite doesn't allow more than 999
+        # zip iter trick : https://stackoverflow.com/questions/1335392/iteration-over-list-slices
+        for matCitKeySubList in zip(*(iter(materialCitationKeyList),) * 900):
+            result = db.session.execute(
+                select(MaterialCitation).where(MaterialCitation.materialCitationKey.in_(matCitKeySubList))
+            ).all()
+            for item in result:
+                output[str(item[0].materialCitationKey)]["done"] = item[0].done
+            result: List[Matching] = db.session.execute(
+                select(Matching).where(Matching.materialCitationKey.in_(matCitKeySubList))
+            ).all()
+            for item in result:
+                item0 = item[0]
+                o = output[str(item0.materialCitationKey)]["institutionOccurrences"].setdefault(
+                    str(item0.specimenKey), {"not_related": True}
+                )
+                o.update(
+                    {
+                        "match": item0.match,
+                        "comment": item0.comment,
+                        "timestamp": int(item0.timestamp.timestamp()),
+                    }
+                )
         return jsonify(output)
 
 
