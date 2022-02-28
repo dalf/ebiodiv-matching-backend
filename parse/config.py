@@ -13,6 +13,11 @@ STRING_DISTANCE = [
 INT_DISTANCE = ["year", "month", "individualCount"]
 FLOAT_DISTANCE = ["decimalLongitude", "decimalLatitude", "elevation"]
 
+API_FIELDS = ['key'] \
+    + STRING_DISTANCE \
+    + INT_DISTANCE \
+    + FLOAT_DISTANCE
+
 # file names
 root_path = Path(__file__).parent.parent
 plazi_records = root_path / "input" / "Occurrences.clusteringPlaziRecords.csv"

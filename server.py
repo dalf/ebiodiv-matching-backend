@@ -1,5 +1,6 @@
 from typing import List
 from datetime import datetime
+import orjson
 
 import server_config
 from parse import config
@@ -17,11 +18,11 @@ from sqlalchemy import (
 
 import flaskfix
 
-from flask import Flask, jsonify, Blueprint, request, redirect
+from flask import Flask, jsonify, Blueprint, request, redirect, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_compress import Compress
-from flask_restplus import Namespace, Api, Resource, fields
+from flask_restplus import Namespace, Api, Resource, fields, reqparse
 
 
 institutions = DiskMap.load(config.institutions_db)
@@ -251,11 +252,7 @@ model_matching_data = api_v1.model(
 @api_v1.doc(description="Fields of occurrences that are used by the matching algorithm.")
 class api_columns(Resource):
     def get(self):
-        return {
-            **{f: "string" for f in config.STRING_DISTANCE},
-            **{f: "integer" for f in config.INT_DISTANCE},
-            **{f: "float" for f in config.FLOAT_DISTANCE},
-        }
+        return config.API_FIELDS
 
 
 @api_v1_browse.route("/institutions")
@@ -351,6 +348,62 @@ class api_no_institutions(api_abstract_institution):
         }
 
 
+def get_occurrences_api(occ):
+    return {
+        k: v
+        for k, v in occ.items()
+        if k in config.API_FIELDS
+    }
+
+
+def get_matcit_specimen(data):
+    return {
+        key: {
+            "materialCitationOccurrence": get_occurrences_api(occurrences[key]),
+            "institutionOccurrences": {
+                ik: { **get_occurrences_api(occurrences[str(ik)]), "$score": vk} for ik, vk in value["institutionOccurrences"].items()
+            },
+        }
+        for key, value in data.items()
+    }
+
+
+def get_specimen_matcit(data):
+    result = {}
+    for matcitKey, institutionOccurences in data.items():
+        matcitOccurrence = get_occurrences_api(occurrences[matcitKey])
+        for institutionKey, score in institutionOccurences['institutionOccurrences'].items():
+            institutionKey = str(institutionKey)
+            if institutionKey not in result:
+                result[institutionKey] = {
+                    "institutionOccurrence": get_occurrences_api(occurrences[institutionKey]),
+                    "materialCitationOccurrences": {},
+                }
+            result[institutionKey]["materialCitationOccurrences"][matcitKey] = {
+                **matcitOccurrence,
+                "$score": score,
+            }
+    return result
+
+
+class DataFormatType(fields.String):
+    '''Restrict input to an integer in a range (inclusive)'''
+
+    def __call__(self, value):
+        return value
+
+    @property
+    def __schema__(self):
+        return {
+            'type': 'string',
+            'enum': ['matcit_specimen', 'specimen_matcit'],
+        }
+
+
+data_format_parser = reqparse.RequestParser()
+data_format_parser.add_argument('format', type=DataFormatType(), help='matcit_specimen or specimen_matcit')
+
+
 @api_v1_data.route("/<dataId>")
 @api_v1_data.param(
     "dataId",
@@ -360,27 +413,28 @@ class api_data_list(Resource):
     @api_v1_data.response(404, "Not found")
     @api_v1_data.response(500, "Internal error")
     @api_v1_data.doc(model=model_data)
+    @api_v1_data.expect(data_format_parser)
     def get(self, dataId):
         if dataId not in matcit_per_institutions:
             response = jsonify({"error": "Not found"})
             response.status_code = 404
             return response
 
+        args = data_format_parser.parse_args()
+        format = args.get("format", "matcit_specimen")
+
         try:
             data = {**matcit_per_institutions[dataId]}
             data["publishingOrg"] = organizations.get(data["publishingOrgKey"])
             data["institution"] = institutions.get(data["institutionKey"])
             data["datasetDocuments"] = {key: datasetmetadata[key] for key in data["datasetDocuments"]}
-            data["data"] = {
-                key: {
-                    "materialCitationOccurrence": occurrences[key],
-                    "institutionOccurrences": {
-                        ik: {**occurrences[str(ik)], "$score": vk} for ik, vk in value["institutionOccurrences"].items()
-                    },
-                }
-                for key, value in data["data"].items()
-            }
-            return jsonify(data)
+            if format == "matcit_specimen":
+                data["data"] = get_matcit_specimen(data["data"])
+            elif format == "specimen_matcit":
+                data["data"] = get_specimen_matcit(data["data"])
+            response = make_response(orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS))
+            response.content_type = app.config["JSONIFY_MIMETYPE"]
+            return response
         except FileNotFoundError:
             response = jsonify({"error": "Not found"})
             response.status_code = 404
