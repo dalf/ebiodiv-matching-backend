@@ -421,7 +421,7 @@ class api_data_list(Resource):
             return response
 
         args = data_format_parser.parse_args()
-        format = args.get("format", "matcit_specimen")
+        format = args.get("format") or "matcit_specimen"
 
         try:
             data = {**matcit_per_institutions[dataId]}
