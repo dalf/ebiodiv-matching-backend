@@ -13,7 +13,7 @@ STRING_DISTANCE = [
 INT_DISTANCE = ["year", "month", "individualCount"]
 FLOAT_DISTANCE = ["decimalLongitude", "decimalLatitude", "elevation"]
 
-API_FIELDS = ['key'] \
+API_FIELDS = ['key', 'scientificName', 'verbatimLabel'] \
     + STRING_DISTANCE \
     + INT_DISTANCE \
     + FLOAT_DISTANCE
