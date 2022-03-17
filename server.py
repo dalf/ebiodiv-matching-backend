@@ -25,6 +25,9 @@ from flask_compress import Compress
 from flask_restplus import Namespace, Api, Resource, fields, reqparse
 
 
+API_FIELDS = server_config.FIELDS + config.MATCHED_FIELDS
+
+
 institutions = DiskMap.load(config.institutions_db)
 matcit_per_institutions = DiskMap.load(config.matcit_per_institutions_db)
 organizations = DiskMap(config.organizations_db, readonly=True)
@@ -252,7 +255,7 @@ model_matching_data = api_v1.model(
 @api_v1.doc(description="Fields of occurrences that are used by the matching algorithm.")
 class api_columns(Resource):
     def get(self):
-        return config.API_FIELDS
+        return API_FIELDS
 
 
 @api_v1_browse.route("/institutions")
@@ -352,7 +355,7 @@ def get_occurrences_api(occ):
     return {
         k: v
         for k, v in occ.items()
-        if k in config.API_FIELDS
+        if k in API_FIELDS
     }
 
 

@@ -13,10 +13,7 @@ STRING_DISTANCE = [
 INT_DISTANCE = ["year", "month", "individualCount"]
 FLOAT_DISTANCE = ["decimalLongitude", "decimalLatitude", "elevation"]
 
-API_FIELDS = ['key', 'scientificName', 'verbatimLabel'] \
-    + STRING_DISTANCE \
-    + INT_DISTANCE \
-    + FLOAT_DISTANCE
+MATCHED_FIELDS = STRING_DISTANCE + INT_DISTANCE + FLOAT_DISTANCE
 
 # file names
 root_path = Path(__file__).parent.parent
