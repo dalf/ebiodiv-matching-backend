@@ -9,6 +9,7 @@ import httpx
 import config
 from utils import http_get
 from diskmap import DiskMap
+from tqdm import tqdm
 
 
 datasets = set()
@@ -17,7 +18,7 @@ limit = 300
 occurrences = DiskMap(config.occurrences_db, cache=False)
 
 def store_occurrence(occurrence):
-    occurrences[occurrence["key"]] = occurrence
+    occurrences[str(occurrence["key"])] = occurrence
 
 
 def new_not_found_occurrence(occurrentId):
@@ -138,16 +139,6 @@ def download_dataset(datasetKey, occurrenceIdSet, dataset_indice, dataset_count)
     return True
 
 
-def get_match_score(o1, o2):
-    fields = ["order", "family", "genus", "species"]
-    match = True
-    for f in fields:
-        if o1.get(f) != o2.get(f):
-            match = False
-            break
-    return match
-
-
 def download_dataset_list():
     global datasets
 
@@ -157,10 +148,10 @@ def download_dataset_list():
     with open(config.plazi_records) as csvfile:
         occurence_reader = csv.reader(csvfile, delimiter=";", quotechar="|")
         next(occurence_reader, None)
-        for row in occurence_reader:
+        for row in tqdm(occurence_reader):
             for occurrenceId, datasetKey in [
-                (int(row[0]), row[2]),
-                (int(row[1]), row[3]),
+                (row[0], row[2]),
+                (row[1], row[3]),
             ]:
                 if occurrenceId not in occurrences:
                     dataset_occurrences.setdefault(datasetKey, set()).add(occurrenceId)
@@ -171,24 +162,6 @@ def download_dataset_list():
     dataset_occurrences_list.sort(key=lambda i: len(i[1]))
     for dataset_indice, info in enumerate(dataset_occurrences_list):
         download_dataset(info[0], info[1], dataset_indice, len(dataset_occurrences_list))
-
-    for occurrenceId1, occurrenceId2 in occurrence_pairs:
-        o1 = occurrences.get(occurrenceId1)
-        o2 = occurrences.get(occurrenceId2)
-        occurrence_found = True
-        if o1 is None:
-            print("Error occurrence", row[0], "not found (datasetKey", row[2], ")")
-            occurrence_found = False
-        if o2 is None:
-            print("Error occurrence", row[1], "not found (datasetKey", row[3], ")")
-            occurrence_found = False
-
-        if occurrence_found:
-            if not get_match_score(o1, o2) and not o1.get("not_found", False) and not o2.get("not_found", False):
-                print(
-                    occurrenceId1,
-                    occurrenceId2,
-                )
 
 
 if __name__ == '__main__':

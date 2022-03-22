@@ -238,7 +238,7 @@ for datasetkey, dataset in tqdm(clusterDict.items()):
     for data in dataset["data"].values():
         del data["materialCitationOccurrence"]
         data["institutionOccurrences"] = {
-            o["key"]: o["$score"] for o in data["institutionOccurrences"]
+            str(o["key"]): o["$score"] for o in data["institutionOccurrences"]
         }
 
 print("** saving")
