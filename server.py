@@ -1,5 +1,7 @@
 from typing import List
 from datetime import datetime
+from itertools import chain, islice
+
 import orjson
 
 import server_config
@@ -444,6 +446,16 @@ class api_data_list(Resource):
             return response
 
 
+def chunked(seq, chunksize):
+    """Yields items from an iterator in iterable chunks."""
+    it = iter(seq)
+    while True:
+        try:
+            yield list(chain([next(it)], islice(it, chunksize-1)))
+        except StopIteration:
+            break
+
+
 @api_v1_matching.route("/data/<dataId>")
 @api_v1_matching.doc(description=r'For each material citation of \<dataId\>, returns the "done" status')
 @api_v1_matching.param(
@@ -473,7 +485,7 @@ class api_matching_data(Resource):
         # avoid sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) too many SQL variables
         # see https://www.sqlite.org/limits.html : sqlite doesn't allow more than 999
         # zip iter trick : https://stackoverflow.com/questions/1335392/iteration-over-list-slices
-        for matCitKeySubList in zip(*(iter(materialCitationKeyList),) * 900):
+        for matCitKeySubList in chunked(iter(materialCitationKeyList), 900):
             result = db.session.execute(
                 select(MaterialCitation).where(MaterialCitation.materialCitationKey.in_(matCitKeySubList))
             ).all()
@@ -538,6 +550,7 @@ class api_matching_matcit(Resource):
         db.session.execute(delete(MaterialCitation).where(MaterialCitation.materialCitationKey == materialCitationKey))
         db.session.add(m)
         db.session.commit()
+        return jsonify({ 'status': 'ok'})
 
     @api_v1_data.response(500, "Internal error")
     @api_v1_data.doc(
@@ -560,6 +573,7 @@ class api_matching_matcit(Resource):
         m = MaterialCitation(materialCitationKey=materialCitationKey, done=body["done"])
         db.session.add(m)
         db.session.commit()
+        return jsonify({ 'status': 'ok'})
 
 
 @api_v1_matching.route("/materialcitation/<materialCitationKey>/specimen/<specimenKey>")
@@ -567,7 +581,7 @@ class api_matching_matcit_specimen(Resource):
     def _check_parameters(self, materialCitationKey, specimenKey):
         if materialCitationKey not in occurrences_to_dataId:
             return "materialCitationKey doesn't exist"
-        specimens = matcit_per_institutions[occurrences_to_dataId[materialCitationKey]]["data"][matcit_per_institutions]
+        specimens = matcit_per_institutions[occurrences_to_dataId[materialCitationKey]]["data"][materialCitationKey]['institutionOccurrences']
         if specimenKey not in specimens:
             return "specimenKey is not related to materialCitationKey"
         return None
