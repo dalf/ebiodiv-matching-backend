@@ -10,6 +10,9 @@ uri=sqlite:///matching.db
 
 [api]
 fields=key, scientificName, verbatimLabel, collectionCode, collectionKey, continent, country, countryCode, stateProvince, county, municipality, locality, depth
+
+[datasource]
+url=https://tb.plazi.org/GgServer/gbifOccLinkData/
 """)
 config.read('server.ini')
 
@@ -17,8 +20,10 @@ config.read('server.ini')
 BASE_URL = config['server']['base_url']
 DATABASE_URI = config['database']['uri']
 FIELDS = [f.strip() for f in config['api']['fields'].split(',')]
+DATASOURCE_URL = config['datasource']['url']
 
 if __name__ == '__main__':
     print(BASE_URL)
     print(DATABASE_URI)
     print(FIELDS)
+    print(DATASOURCE_URL)
