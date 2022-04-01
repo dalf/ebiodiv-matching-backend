@@ -1,3 +1,4 @@
+from email.policy import default
 from typing import List
 from datetime import datetime
 
@@ -25,6 +26,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_compress import Compress
 from flask_restplus import Api, Resource, fields, reqparse
+from flask_restplus import inputs
 
 
 APP_DEBUG = True
@@ -76,6 +78,7 @@ def log_response(response: httpx.Response):
 
 HTTPCLIENT = httpx.Client(
     base_url=server_config.DATASOURCE_URL,
+    timeout=server_config.DATASOURCE_TIMEOUT,
     event_hooks={'response': [log_response]},
 )
 
@@ -91,6 +94,7 @@ occurrences_format_parser = reqparse.RequestParser()
 occurrences_format_parser.add_argument('institutionKey', type=str, help='institutionKey')
 occurrences_format_parser.add_argument('datasetKey', type=str, help='datasetKey')
 occurrences_format_parser.add_argument('occurrenceKeys', type=str, help='list of occurrenceKey separated by space')
+occurrences_format_parser.add_argument('scores', type=inputs.boolean, default=False, help='should includes the scores?')
 
 ########
 
@@ -147,6 +151,8 @@ class occurrences(Resource):
     @api_v2.expect(occurrences_format_parser)
     def get(self):
         params = occurrences_format_parser.parse_args()
+        print(params)
+        include_scores = params.pop('scores')
         for k, v in list(params.items()):
             if v is None:
                 del params[k]
@@ -155,7 +161,8 @@ class occurrences(Resource):
             return Response(response.content, status=response.status_code, content_type=response.headers['Content-Type'])
         data = response.json()
         self._normalize(data)
-        self._add_score(data)
+        if include_scores:
+            self._add_score(data)
         return jsonify(data)
 
 
