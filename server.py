@@ -136,16 +136,13 @@ class datasets(Resource):
 class occurrences(Resource):
 
     def _normalize(self, data) -> None:
-        occ_index = {}
-        for o in data['occurrences']:
+        for o in data['occurrences'].values():
             matchingalgorithm.normalize_occurrence(o)
-            occ_index[o['key']] = o
-        data['occurrences'] = occ_index
 
     def _add_score(self, data) -> None:
         for relation in data['occurrenceRelations']:
-            o1 = data['occurrences'][relation['occurrenceKey1']]
-            o2 = data['occurrences'][relation['occurrenceKey2']]
+            o1 = data['occurrences'][str(relation['occurrenceKey1'])]
+            o2 = data['occurrences'][str(relation['occurrenceKey2'])]
             relation['score'] = matchingalgorithm.get_score(o1, o2)
 
     @api_v2.expect(occurrences_format_parser)
