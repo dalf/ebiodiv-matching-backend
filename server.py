@@ -96,7 +96,23 @@ occurrences_format_parser.add_argument('datasetKey', type=str, help='datasetKey'
 occurrences_format_parser.add_argument('occurrenceKeys', type=str, help='list of occurrenceKey separated by space')
 occurrences_format_parser.add_argument('scores', type=inputs.boolean, default=False, help='should includes the scores?')
 
+
 ########
+
+# fields
+@api_v2.route("/fields")
+@api_v2.doc(description="fields")
+class fieldList(Resource):
+    def get(self):
+        result = {
+            column_name: [ column_name ]
+            for column_name in matchingalgorithm.FIELDS
+        }
+        result.update({
+            column_names[0]: list(column_names)
+            for column_names in matchingalgorithm.MULTI_FIELDS
+        })
+        return result
 
 
 # institutionList
@@ -135,20 +151,23 @@ class datasets(Resource):
 @api_v2.doc(description="list of occurrences")
 class occurrences(Resource):
 
-    def _normalize(self, data) -> None:
-        for o in data['occurrences'].values():
-            matchingalgorithm.normalize_occurrence(o)
-
     def _add_score(self, data) -> None:
+        # normalized a copy of the occurrences
+        normalized_occ_dict = {}
+        for occ_key, occ in data['occurrences'].items():
+            normalized_occ = occ.copy()
+            matchingalgorithm.normalize_occurrence(normalized_occ)
+            normalized_occ_dict[int(occ_key)] = normalized_occ
+        # get the scores from the normalized occurrences
+        # leave the original occurrences untouched
         for relation in data['occurrenceRelations']:
-            o1 = data['occurrences'][str(relation['occurrenceKey1'])]
-            o2 = data['occurrences'][str(relation['occurrenceKey2'])]
-            relation['score'] = matchingalgorithm.get_score(o1, o2)
+            o1 = normalized_occ_dict[relation['occurrenceKey1']]
+            o2 = normalized_occ_dict[relation['occurrenceKey2']]
+            relation['scores'] = matchingalgorithm.get_scores(o1, o2)
 
     @api_v2.expect(occurrences_format_parser)
     def get(self):
         params = occurrences_format_parser.parse_args()
-        print(params)
         include_scores = params.pop('scores')
         for k, v in list(params.items()):
             if v is None:
@@ -157,7 +176,6 @@ class occurrences(Resource):
         if response.status_code != 200:
             return Response(response.content, status=response.status_code, content_type=response.headers['Content-Type'])
         data = response.json()
-        self._normalize(data)
         if include_scores:
             self._add_score(data)
         return jsonify(data)
