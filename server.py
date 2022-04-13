@@ -1,66 +1,40 @@
 from email.policy import default
-from typing import List
-from datetime import datetime
+from typing import List, Optional
+from datetime import date
+from time import time
+from itertools import chain, islice
 
-import orjson
+from pydantic import BaseModel, ValidationError
 import httpx
 
 import server_config
 import matchingalgorithm
-
-from sqlalchemy import (
-    select,
-    delete,
-    Column,
-    Integer,
-    String,
-    Boolean,
-    DateTime,
-)
+import diskmap
 
 import flaskfix
 
 from flask import Flask, jsonify, Blueprint, request, redirect, make_response
 from flask.wrappers import Response
-from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_compress import Compress
-from flask_restplus import Api, Resource, fields, reqparse
+from flask_restplus import Api, Resource, Namespace, fields, reqparse
 from flask_restplus import inputs
 
 
 APP_DEBUG = True
 app = Flask(__name__)
 app.config["JSONIFY_PRETTYPRINT_REGULAR"] = False
-app.config["SQLALCHEMY_DATABASE_URI"] = server_config.DATABASE_URI
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db = SQLAlchemy(app)
 app.config["RESTPLUS_MASK_SWAGGER"] = False
 if server_config.BASE_URL:
     flaskfix.patch_application(app, server_config.BASE_URL)
 
 
-# database
-class MaterialCitation(db.Model):
-    __tablename__ = "materialcitation"
+matching_db = diskmap.DiskMap('matching.lmdb')
 
-    materialCitationKey = Column(String, primary_key=True)
-    done = Column(Boolean, nullable=False)
-
-
-class Matching(db.Model):
-    __tablename__ = "matching"
-    # __table_args__ = (UniqueConstraint('materialCitationKey', 'specimenKey', name='_materialCitationKey_specimenKey_uc'), )
-
-    _id = Column(Integer, primary_key=True)
-    materialCitationKey = Column(Integer, nullable=False)
-    specimenKey = Column(String, nullable=False)
-    match = Column(Boolean, nullable=True)
-    comment = Column(String, nullable=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-
-db.create_all()
+class MatchingDecision(BaseModel):
+    match: Optional[bool] = None
+    timestamp: Optional[int] = None
+    comment: Optional[str] = None
 
 
 # API v2
@@ -68,8 +42,26 @@ blueprint = Blueprint("v2", __name__)
 api_v2 = Api(blueprint)
 app.register_blueprint(blueprint, url_prefix="/v2")
 
+api_v2_matching = Namespace("Matching", description="read & update the matching beetween the occurrences")
+api_v2_meta = Namespace("Meta", description="meta information")
+
+api_v2.add_namespace(api_v2_matching, path="/matching")
+api_v2.add_namespace(api_v2_meta, path="/meta")
+
 CORS(app)
 Compress(app)
+
+
+# model
+model_post_matching = api_v2.model(
+    "Matching",
+    {
+        "occurrenceKey1": fields.String("occurrence key 1"),
+        "occurrenceKey2": fields.String("occurrence key 2"),
+        "match": fields.Boolean("The curators has declared the matching done for this material citation"),
+        "comment": fields.String("Optional comment"),
+    },
+)
 
 
 def log_response(response: httpx.Response):
@@ -96,12 +88,17 @@ occurrences_format_parser.add_argument('datasetKey', type=str, help='datasetKey'
 occurrences_format_parser.add_argument('occurrenceKeys', type=str, help='list of occurrenceKey separated by space')
 occurrences_format_parser.add_argument('scores', type=inputs.boolean, default=False, help='should includes the scores?')
 
+########
+
+matching_get_parser = reqparse.RequestParser()
+matching_get_parser.add_argument('occurrenceKey1', type=str, help='first occurrence key')
+matching_get_parser.add_argument('occurrenceKey2', type=str, help='second occurrence key')
 
 ########
 
 # fields
-@api_v2.route("/fields")
-@api_v2.doc(description="fields")
+@api_v2_meta.route("/fields")
+@api_v2_meta.doc(description="fields")
 class fieldList(Resource):
     def get(self):
         result = {
@@ -146,6 +143,25 @@ class datasets(Resource):
         return Response(response.content, status=response.status_code, content_type=response.headers['Content-Type'])
 
 
+def chunked(seq, chunksize):
+    """Yields items from an iterator in iterable chunks."""
+    it = iter(seq)
+    while True:
+        try:
+            yield list(chain([next(it)], islice(it, chunksize-1)))
+        except StopIteration:
+            break
+
+
+def get_relation_id(occurrenceKey1, occurrenceKey2):
+    relation_keys = [
+        int(occurrenceKey1),
+        int(occurrenceKey2)
+    ]
+    relation_keys.sort()
+    return str(relation_keys[0]) + ',' + str(relation_keys[1]) 
+
+
 # occurrences
 @api_v2.route("/occurrences")
 @api_v2.doc(description="list of occurrences")
@@ -164,6 +180,15 @@ class occurrences(Resource):
             o1 = normalized_occ_dict[relation['occurrenceKey1']]
             o2 = normalized_occ_dict[relation['occurrenceKey2']]
             relation['scores'] = matchingalgorithm.get_scores(o1, o2)
+    
+    def _add_matching(self, data) -> None:
+        for relation in data['occurrenceRelations']:
+            relation_id = get_relation_id(relation['occurrenceKey1'], relation['occurrenceKey2'])
+            relation['matching'] = matching_db.get(relation_id, {
+                'match': None,
+                'timestamp': None,
+                'comment': None
+            })
 
     @api_v2.expect(occurrences_format_parser)
     def get(self):
@@ -178,7 +203,56 @@ class occurrences(Resource):
         data = response.json()
         if include_scores:
             self._add_score(data)
+            self._add_matching(data)
         return jsonify(data)
+
+
+@api_v2_matching.route("")
+@api_v2_matching.doc(description="list of occurrences")
+class matching(Resource):
+
+    @api_v2.doc(description='Get the "match" value between two occurrences',)
+    @api_v2.response(400, "Bad request")
+    @api_v2.response(500, "Internal error")
+    @api_v2.expect(matching_get_parser)
+    def get(self):
+        params = matching_get_parser.parse_args()
+        occurrenceKey1 = params.get('occurrenceKey1')
+        occurrenceKey2 = params.get('occurrenceKey2')
+        relation_id = get_relation_id(occurrenceKey1, occurrenceKey2)
+        matching_decision = matching_db.get(relation_id, {})
+        matching_decision = MatchingDecision(**matching_decision).dict()
+        matching_decision['occurrenceKey1'] = int(occurrenceKey1)
+        matching_decision['occurrenceKey2'] = int(occurrenceKey2)
+        return matching_decision
+
+    @api_v2.doc(
+        body=model_post_matching,
+        description='Update the "match" value between two occurrences',
+    )
+    @api_v2.response(400, "Bad request")
+    @api_v2.response(500, "Internal error")
+    def post(self):
+        decission = request.json or {}
+        decission['timestamp'] = time()
+        occurrenceKey1 = decission.get('occurrenceKey1')
+        occurrenceKey2 = decission.get('occurrenceKey2')
+        if not occurrenceKey1 or not occurrenceKey2:
+            return {
+                "errors": "occurrenceKey1 and/or occurrenceKey2 are missing"
+            }, 400
+        relation_id = get_relation_id(decission['occurrenceKey1'], decission['occurrenceKey2'])
+        try:
+            matching_decision = MatchingDecision(**request.json).dict()
+        except ValidationError as e:
+            return {
+                "errors": e.errors()
+            }, 400
+        else:
+            matching_db[relation_id] = matching_decision
+            matching_decision['occurrenceKey1'] = int(decission['occurrenceKey1'])
+            matching_decision['occurrenceKey2'] = int(decission['occurrenceKey2'])
+            return matching_db[relation_id]
 
 
 @app.route("/")
