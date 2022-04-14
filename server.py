@@ -201,9 +201,9 @@ class occurrences(Resource):
         if response.status_code != 200:
             return Response(response.content, status=response.status_code, content_type=response.headers['Content-Type'])
         data = response.json()
+        self._add_matching(data)
         if include_scores:
             self._add_score(data)
-            self._add_matching(data)
         return jsonify(data)
 
 
