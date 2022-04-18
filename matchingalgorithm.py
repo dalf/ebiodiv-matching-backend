@@ -131,6 +131,12 @@ def get_score_numeric(subject_value, related_value):
 
 
 def get_occurrence_date(occ):
+    """Return the number of day since 1/1/0.
+    * If the month is not defined then it is replaced by 1
+    * If the day is not defnied then it is replaced by 1
+
+    Return None if year is not defined
+    """
     if occ["year"]:
         dt = datetime.date(occ["year"], occ["month"] or 1, occ["day"] or 1)
         return dt.toordinal()
@@ -143,14 +149,14 @@ def get_score_yearmonthday(subject_occ, related_occ):
     if subject_date and related_date:
         """
         The current scoring takes into account the date difference, nothing more.
-        350 is an arbitrary number:
+        350 in math.exp(...) is adjusted to have:
         * a 30 days distance returns a score of 0.918
         * a 365 days distance returns a score of 0.352
         * a 730 days distance returns a score of 0.124
 
         It may require some adjustments after a review of confirmed matched occurrences.
 
-        Possible errors (ignore in this implementation):
+        Possible errors (ignored in this implementation):
         * A typo about "22/5/2022" can transform in "2/5/2022" or "22/8/2022" or "22/5/2012".
         * A date format misunderstanding can transform in "2/5/2022" to "5/2/2022".
         * If the day is missing "22/5/2022" becomes "5/2022". The current scoring seen "5/2022" as "1/5/2022".
@@ -205,7 +211,7 @@ def get_score_elevationdepth(subject_occ, related_occ):
 
 def get_scores(subject_occ, related_occ):
     # row: field, column: occurrences
-    a = []
+    score_values = []
     labels = []
     weights = []
 
@@ -213,28 +219,28 @@ def get_scores(subject_occ, related_occ):
     for field_name, field_desc in FIELDS.items():
         subject_value = subject_occ[field_name]
         related_value = related_occ[field_name]
-        a.append([field_desc.get_score(subject_value, related_value)])
+        score_values.append([field_desc.get_score(subject_value, related_value)])
         labels.append(field_name)
         weights.append(field_desc.score_weight)
 
     for field_names, field_desc in MULTI_FIELDS.items():
-        a.append([field_desc.get_score(subject_occ, related_occ)])
+        score_values.append([field_desc.get_score(subject_occ, related_occ)])
         labels.append(field_names[0])
         weights.append(field_desc.score_weight)
 
-    anp = np.array(a)
-    # calculate score
-    # use masked_invalid to use ma.average with some np.nan in anp
-    scores = ma.average(ma.masked_invalid(anp), axis=0, weights=weights)
+    score_array = np.array(score_values)
+    # calculate the global score = weight average
+    # use masked_invalid to use ma.average with some np.nan in score_array
+    score_average = ma.average(ma.masked_invalid(score_array), axis=0, weights=weights)
     # add score to the array
     labels.append("$global")
-    anp = np.append(anp, [scores], axis=0)
+    score_array = np.append(score_array, [score_average], axis=0)
     #
-    anp = np.around(anp, decimals=3)
+    score_array = np.around(score_array, decimals=3)
 
-    # iterate over occurrences using anp.transpose()
+    # iterate over occurrences using score_array.transpose()
     result = []
-    for row in anp.transpose():
+    for row in score_array.transpose():
         result.append({key: None if np.isnan(value) else value for key, value in zip(labels, row.tolist())})
     return result[0]
 

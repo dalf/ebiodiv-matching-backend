@@ -143,16 +143,6 @@ class datasets(Resource):
         return Response(response.content, status=response.status_code, content_type=response.headers['Content-Type'])
 
 
-def chunked(seq, chunksize):
-    """Yields items from an iterator in iterable chunks."""
-    it = iter(seq)
-    while True:
-        try:
-            yield list(chain([next(it)], islice(it, chunksize-1)))
-        except StopIteration:
-            break
-
-
 def get_relation_id(occurrenceKey1, occurrenceKey2):
     relation_keys = [
         int(occurrenceKey1),

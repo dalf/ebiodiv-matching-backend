@@ -5,7 +5,6 @@ import pathlib
 
 import lmdb
 import cbor2
-import zstandard
 
 
 class DiskMap(collections.abc.MutableMapping):
