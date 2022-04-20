@@ -249,7 +249,7 @@ def get_scores(subject_occ, related_occ):
 FieldDescription = namedtuple("FieldDescription", ["score_weight", "normalize", "get_score"])
 
 FIELDS = {
-    "familly": FieldDescription(2, normalize_str, get_score_string_jw),
+    "family": FieldDescription(2, normalize_str, get_score_string_jw),
     "genus": FieldDescription(2, normalize_str, get_score_string_jw),
     "specificEpithet": FieldDescription(2, normalize_str, get_score_string_jw),
     "country": FieldDescription(1, normalize_str, get_score_string_exact),  # the value is normalized by GBIF, there is no typo
