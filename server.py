@@ -60,7 +60,7 @@ model_post_matching = api_v2.model(
         "occurrenceKey2": fields.String("occurrence key 2"),
         "match": fields.Boolean("The curators has declared the matching done for this material citation"),
         "comment": fields.String("Optional comment"),
-    },
+    }
 )
 
 
@@ -223,26 +223,30 @@ class matching(Resource):
     @api_v2.response(400, "Bad request")
     @api_v2.response(500, "Internal error")
     def post(self):
-        decission = request.json or {}
-        decission['timestamp'] = time()
-        occurrenceKey1 = decission.get('occurrenceKey1')
-        occurrenceKey2 = decission.get('occurrenceKey2')
-        if not occurrenceKey1 or not occurrenceKey2:
-            return {
-                "errors": "occurrenceKey1 and/or occurrenceKey2 are missing"
-            }, 400
-        relation_id = get_relation_id(decission['occurrenceKey1'], decission['occurrenceKey2'])
-        try:
-            matching_decision = MatchingDecision(**request.json).dict()
-        except ValidationError as e:
-            return {
-                "errors": e.errors()
-            }, 400
-        else:
-            matching_db[relation_id] = matching_decision
-            matching_decision['occurrenceKey1'] = int(decission['occurrenceKey1'])
-            matching_decision['occurrenceKey2'] = int(decission['occurrenceKey2'])
-            return matching_db[relation_id]
+        now = int(time())
+        result = []
+        invalid_input = False
+        request_body = request.json
+        if request_body is None:
+            request_body = []
+        elif isinstance(request_body, dict):
+            request_body = [ request_body ]
+        for item in request_body:
+            item['timestamp'] = now
+            relation_id = get_relation_id(item['occurrenceKey1'], item['occurrenceKey2'])
+            matching_db[relation_id] = {
+                'match': item['match'],
+                'comment': item['comment'],
+                'timestamp': now,
+            }
+            result.append({
+                'occurrenceKey1': int(item['occurrenceKey1']),
+                'occurrenceKey2': int(item['occurrenceKey2']),
+                'match': item['match'],
+                'comment': item['comment'],
+                'timestamp': now,
+            })
+        return result, 400 if invalid_input else 200
 
 
 @app.route("/")
