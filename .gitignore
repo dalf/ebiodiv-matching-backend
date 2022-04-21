@@ -2,4 +2,3 @@ venv
 __pycache__
 matching.db
 server.ini
-output/*.lmdb-lock
