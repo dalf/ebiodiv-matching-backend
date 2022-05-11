@@ -69,7 +69,19 @@ def configure_logging():
         'programname': {'color': 'cyan'},
         'username': {'color': 'yellow'},
     }
-    coloredlogs.install(level=log_level, level_styles=level_styles, field_styles=field_styles, fmt=log_format, reconfigure=True, milliseconds=True)
+    if sys.platform == 'win32':
+        isatty = False
+    else:
+        isatty = not args.production
+    coloredlogs.install(
+        level=log_level,
+        level_styles=level_styles,
+        field_styles=field_styles,
+        fmt=log_format,
+        reconfigure=True,
+        milliseconds=True,
+        isatty=isatty,
+    )
 
 
 def configure_app(app):
