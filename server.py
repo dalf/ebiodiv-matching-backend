@@ -12,8 +12,13 @@ import coloredlogs
 import uvicorn
 import uvicorn.config
 from uvicorn.importer import import_from_string
-import gunicorn.app.base
-from gunicorn.glogging import Logger
+
+try:
+    import gunicorn
+    import gunicorn.app.base
+    from gunicorn.glogging import Logger
+except ImportError:
+    gunicorn = None
 
 
 # Debug
@@ -28,6 +33,12 @@ def read_config(default_config) -> configparser.ConfigParser:
     config.read_string(default_config)
     config.read("server.ini")
     return config
+
+
+def get_workers(config):
+    if "worker" not in config:
+        return min(8, multiprocessing.cpu_count())
+    return int(config["worker"])
 
 
 ## LOGGING
@@ -67,53 +78,48 @@ def configure_app(app):
 
 ## RUN PRODUCTION
 
-class StubbedGunicornLogger(Logger):
-    def setup(self, cfg):
-        configure_logging()
-        self.error_logger = logging.getLogger("gunicorn.error")
-        self.access_logger = logging.getLogger("gunicorn.access")
-        self.error_logger.setLevel("INFO")
-        self.access_logger.setLevel("INFO")
-        self.access_logger.addHandler(logging.root.handlers[0])
-        self.error_logger.addHandler(logging.root.handlers[0])
-        self.error_logger.propagate = False
-        self.access_logger.propagate = False
+if gunicorn:
+    class StubbedGunicornLogger(Logger):
+        def setup(self, cfg):
+            configure_logging()
+            self.error_logger = logging.getLogger("gunicorn.error")
+            self.access_logger = logging.getLogger("gunicorn.access")
+            self.error_logger.setLevel("INFO")
+            self.access_logger.setLevel("INFO")
+            self.access_logger.addHandler(logging.root.handlers[0])
+            self.error_logger.addHandler(logging.root.handlers[0])
+            self.error_logger.propagate = False
+            self.access_logger.propagate = False
 
 
-class StandaloneApplication(gunicorn.app.base.BaseApplication):
-    def __init__(self, app_name, options=None):
-        self.options = options or {}
-        self.application = import_from_string(app_name)
-        super().__init__()
+    class StandaloneApplication(gunicorn.app.base.BaseApplication):
+        def __init__(self, app_name, options=None):
+            self.options = options or {}
+            self.application = import_from_string(app_name)
+            super().__init__()
 
-    def load_config(self):
-        config = {key: value for key, value in self.options.items() if key in self.cfg.settings and value is not None}
-        for key, value in config.items():
-            self.cfg.set(key.lower(), value)
+        def load_config(self):
+            config = {key: value for key, value in self.options.items() if key in self.cfg.settings and value is not None}
+            for key, value in config.items():
+                self.cfg.set(key.lower(), value)
 
-    def load(self):
-        return self.application
-
-
-def get_workers(config):
-    if "worker" not in config:
-        return min(8, multiprocessing.cpu_count())
-    return int(config["worker"])
+        def load(self):
+            return self.application
 
 
-def run_gunicorn(config, app_name, args):
-    options = {
-        "bind": "%s:%s" % (config["host"], config["port"]),
-        "workers": get_workers(config),
-        "accesslog": "-",
-        "errorlog": "-",
-        "logger_class": StubbedGunicornLogger,
-        "worker_class": "uvicorn.workers.UvicornWorker",
-        "default_proc_name": config.get("default_proc_name", "gunicorn"),
-        "keyfile": config.get("ssl_keyfile"),
-        "certfile": config.get("ssl_certfile"),
-    }
-    StandaloneApplication(app_name, options).run()
+    def run_gunicorn(config, app_name, args):
+        options = {
+            "bind": "%s:%s" % (config["host"], config["port"]),
+            "workers": get_workers(config),
+            "accesslog": "-",
+            "errorlog": "-",
+            "logger_class": StubbedGunicornLogger,
+            "worker_class": "uvicorn.workers.UvicornWorker",
+            "default_proc_name": config.get("default_proc_name", "gunicorn"),
+            "keyfile": config.get("ssl_keyfile"),
+            "certfile": config.get("ssl_certfile"),
+        }
+        StandaloneApplication(app_name, options).run()
 
 
 ## RUN DEBUG
@@ -208,7 +214,7 @@ def parse_args(app_name = ""):
 def run(config, app_name):
     args = parse_args(app_name)
     configure_logging()
-    if args.production and sys.platform != "win32":
+    if args.production and gunicorn:
         run_gunicorn(config, app_name, args)
     else:
         run_uvicorn(config, app_name, args)
