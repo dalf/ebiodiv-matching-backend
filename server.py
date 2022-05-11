@@ -99,7 +99,7 @@ def run_production(config, app_name, args):
     if "worker" not in config:
         workers = min(8, multiprocessing.cpu_count())
     else:
-        workers = int(config.get("worker", "1"))
+        workers = int(config["worker"])
     options = {
         "bind": "%s:%s" % (config["host"], config["port"]),
         "workers": workers,

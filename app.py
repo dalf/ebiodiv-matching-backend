@@ -29,6 +29,7 @@ root_path=/
 host=localhost
 port=8888
 default_proc_name=ebiodiv
+# worker=8
 # ssl_keyfile=
 # ssl_certfile=
 
