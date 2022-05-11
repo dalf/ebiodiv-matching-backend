@@ -8,7 +8,8 @@ For reference:
 import decimal
 import math
 import datetime
-from typing import Optional, Tuple
+import re
+from typing import Optional, Tuple, List, Dict, FrozenSet
 from collections import namedtuple
 
 import jaro
@@ -18,9 +19,22 @@ import numpy.ma as ma
 
 """Normalization of the occurrences"""
 
+RE_NOT_ALPHANUM = re.compile(r"[^A-Z0-9]+")
+
 
 def normalize_str(value: Optional[str]) -> str:
     return value.strip() if value else ""
+
+
+def normalize_str_alphanum(value: Optional[str]) -> str:
+    """
+    * "I.42891-001" and "I 42891 - 001" becomes "I42891001" (without spaces).
+    * "KS.43690" and "KS46553" becomes "KS46553" (occurrences 1100114000 and 3066982498)
+
+    Drawback: "KS13" and "40.KS,13.KS" are going to match in get_score_string_exact_or_include
+    """
+    value = normalize_str(value).upper()
+    return RE_NOT_ALPHANUM.sub("", value)
 
 
 def normalize_str_or_none(value: Optional[str]) -> Optional[str]:
@@ -88,6 +102,18 @@ def normalize_latlon(lat, long) -> Tuple[Optional[float], Optional[float]]:
     return long, lat
 
 
+def normalize_recordedbyids(recordedbyids: Optional[List[Dict[str, str]]]) -> FrozenSet[str]:
+    """Dict[str, str] : there are two keys: "type" and "value".
+    """
+    if recordedbyids is None:
+        return frozenset()
+
+    return frozenset({
+        v["value"]  # ignore "type"
+        for v in recordedbyids
+    })
+
+
 def normalize_occurrence(occurrence):
     for field_name, field_desc in FIELDS.items():
         occurrence[field_name] = field_desc.normalize(occurrence.get(field_name))
@@ -102,13 +128,40 @@ def normalize_occurrence(occurrence):
 
 
 def get_score_string_jw(subject_value, related_value):
-    if subject_value is not None and related_value is not None:
-        return jaro.jaro_winkler_metric(subject_value, related_value)
-    return np.nan
+    if subject_value is None or related_value is None or subject_value == "" or related_value == "":
+        return np.nan
+    return jaro.jaro_winkler_metric(subject_value, related_value)
 
 
 def get_score_string_exact(subject_value, related_value):
-    return 1 if related_value.lower() == subject_value.lower() else 0
+    if subject_value == "" or related_value == "":
+        return np.nan
+    return 1 if related_value.upper() == subject_value.upper() else 0
+
+
+def get_score_string_exact_or_include(subject_value, related_value):
+    """
+    occurrence 1804360418: catalog number = "CMNA 2015-0001"
+    occurrence 2871638302: catalog number = "CMNA 2015-0001, CMNA 2015-0004, CMNA 2015-0011, CMNA 2015-0015, CMNA 2015-0017"
+
+    the values are normalized as (by normalize_str_alphanum):
+    "CMNA 2015 0001"
+    and "CMNA 2015 0001 CMNA 2015 0004 CMNA 2015 0011 CMNA 2015 0015 CMNA 2015 0017"
+
+    this scoring function returns 0.8 for these two occurrences.
+
+    Note: in case of "RUSI 6139 (previously ORI 1482 (erroneously listed as ORI 1485 in the RUSI database ))"
+    and "ORI 1485" the score is going to be 0.8 too.
+    """
+    if subject_value == "" or related_value == "":
+        return np.nan
+    subject_value = subject_value.upper()
+    related_value = related_value.upper()
+    if subject_value == related_value:
+        return 1
+    if subject_value in related_value or related_value in subject_value:
+        return 0.8
+    return 0
 
 
 def get_score_numeric(subject_value, related_value):
@@ -130,15 +183,22 @@ def get_score_numeric(subject_value, related_value):
     return result[0]
 
 
+def get_score_recordedbyids(subject_value: FrozenSet[str], related_value: FrozenSet[str]) -> float:
+    """If at least one identifier match, then the score is 1
+    otherwise the score 0
+    """
+    return 1 if len(subject_value.intersection(related_value)) > 0 else 0
+
+
 def get_occurrence_date(occ):
     """Return the number of day since 1/1/0.
-    * If the month is not defined then it is replaced by 1
-    * If the day is not defnied then it is replaced by 1
+    * If the month is not defined then it is replaced by 6
+    * If the day is not defnied then it is replaced by 15
 
     Return None if year is not defined
     """
     if occ["year"]:
-        dt = datetime.date(occ["year"], occ["month"] or 1, occ["day"] or 1)
+        dt = datetime.date(occ["year"], occ["month"] or 6, occ["day"] or 15)
         return dt.toordinal()
     return None
 
@@ -150,9 +210,9 @@ def get_score_yearmonthday(subject_occ, related_occ):
         """
         The current scoring takes into account the date difference, nothing more.
         350 in math.exp(...) is adjusted to have:
-        * a 30 days distance returns a score of 0.918
-        * a 365 days distance returns a score of 0.352
-        * a 730 days distance returns a score of 0.124
+        * a 1 day distance returns a score of 0.90
+        * a 7 days distance returns a score of 0.49
+        * a 15 days distance returns a score of 0.22
 
         It may require some adjustments after a review of confirmed matched occurrences.
 
@@ -161,7 +221,7 @@ def get_score_yearmonthday(subject_occ, related_occ):
         * A date format misunderstanding can transform in "2/5/2022" to "5/2/2022".
         * If the day is missing "22/5/2022" becomes "5/2022". The current scoring seen "5/2022" as "1/5/2022".
         """
-        return math.exp(-abs(subject_date - related_date) / 350)
+        return math.exp(-abs(subject_date - related_date) / 10)
     return np.nan
 
 
@@ -249,20 +309,25 @@ def get_scores(subject_occ, related_occ):
 FieldDescription = namedtuple("FieldDescription", ["score_weight", "normalize", "get_score"])
 
 FIELDS = {
-    "family": FieldDescription(2, normalize_str, get_score_string_jw),
-    "genus": FieldDescription(2, normalize_str, get_score_string_jw),
-    "specificEpithet": FieldDescription(2, normalize_str, get_score_string_jw),
+    "typeStatus": FieldDescription(2, normalize_str, get_score_string_exact),
+    "basisOfRecord": FieldDescription(2, normalize_str, get_score_string_exact),
+    "basisOfRecord": FieldDescription(2, normalize_str, get_score_string_exact),
+    "recordedBy": FieldDescription(2, normalize_str, get_score_string_jw),
+    "recordNumber": FieldDescription(2, normalize_str, get_score_string_exact),
+    "recordedByIDs": FieldDescription(2, normalize_recordedbyids, get_score_recordedbyids),
+    "collectionCode": FieldDescription(2, normalize_str_alphanum, get_score_string_exact_or_include),
+    "catalogNumber": FieldDescription(2, normalize_str_alphanum, get_score_string_exact_or_include),
+    "individualCount": FieldDescription(1, normalize_int, get_score_numeric),
+    "family": FieldDescription(1, normalize_str, get_score_string_jw),
+    "genus": FieldDescription(1, normalize_str, get_score_string_jw),
+    "specificEpithet": FieldDescription(1, normalize_str, get_score_string_jw),
     "country": FieldDescription(1, normalize_str, get_score_string_exact),  # the value is normalized by GBIF, there is no typo
     "city": FieldDescription(1, normalize_str_or_none, get_score_string_jw),
     "locality": FieldDescription(0.5, normalize_str_or_none, get_score_string_jw),
-    "recordedBy": FieldDescription(1, normalize_str, get_score_string_jw),
-    "collectionCode": FieldDescription(1, normalize_str, get_score_string_exact),
-    "catalogNumber": FieldDescription(1, normalize_str, get_score_string_exact),
-    "individualCount": FieldDescription(1, normalize_int, get_score_numeric),
 }
 
 MULTI_FIELDS = {
     ("elevation", "depth"): FieldDescription(1, normalize_elevationdepth, get_score_elevationdepth),
     ("year", "month", "day"): FieldDescription(1, normalize_yearmonthday, get_score_yearmonthday),
-    ("decimalLatitude", "decimalLongitude"): FieldDescription(1, normalize_latlon, get_score_latlon),
+    ("decimalLatitude", "decimalLongitude"): FieldDescription(2, normalize_latlon, get_score_latlon),
 }
