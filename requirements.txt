@@ -1,6 +1,6 @@
 fastapi==0.75.2
 uvicorn[standard]==0.17.6
-gunicorn==20.1.0
+gunicorn==20.1.0;sys_platform!='win32'
 setproctitle==1.2.3;sys_platform!='win32'
 coloredlogs==15.0.1
 aiohttp[speedups]==3.8.1

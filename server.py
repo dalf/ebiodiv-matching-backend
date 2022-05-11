@@ -95,14 +95,16 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
         return self.application
 
 
-def run_production(config, app_name, args):
+def get_workers(config):
     if "worker" not in config:
-        workers = min(8, multiprocessing.cpu_count())
-    else:
-        workers = int(config["worker"])
+        return min(8, multiprocessing.cpu_count())
+    return int(config["worker"])
+
+
+def run_gunicorn(config, app_name, args):
     options = {
         "bind": "%s:%s" % (config["host"], config["port"]),
-        "workers": workers,
+        "workers": get_workers(config),
         "accesslog": "-",
         "errorlog": "-",
         "logger_class": StubbedGunicornLogger,
@@ -137,7 +139,7 @@ def get_reload_excludes():
                 yield file_name.replace('\n', '')
 
 
-def run_debug(config, app_name, args):
+def run_uvicorn(config, app_name, args):
     # normal configuration
     uvicorn_logging_config = {
         "version": 1,
@@ -170,7 +172,13 @@ def run_debug(config, app_name, args):
         ssl_certfile= config.get("ssl_certfile"),
     )
 
-    if not args.profile_filename:
+    if args.production:
+        uvicorn.run(
+            app_name,
+            workers = get_workers(config),
+            **uvicorn_kwargs
+        )
+    elif not args.profile_filename:
         uvicorn.run(
             app_name,
             reload=True,
@@ -200,10 +208,10 @@ def parse_args(app_name = ""):
 def run(config, app_name):
     args = parse_args(app_name)
     configure_logging()
-    if args.production:
-        run_production(config, app_name, args)
+    if args.production and sys.platform != "win32":
+        run_gunicorn(config, app_name, args)
     else:
-        run_debug(config, app_name, args)
+        run_uvicorn(config, app_name, args)
 
 
 args = parse_args()
