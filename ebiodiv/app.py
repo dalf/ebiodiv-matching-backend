@@ -13,10 +13,7 @@ from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 from logging import Logger
 
-import diskmap
-import matchingalgorithm
-from . import server
-from . import utils
+from . import diskmap, matchingalgorithm, server, utils
 
 
 logger = logging.getLogger(__name__)

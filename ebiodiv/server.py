@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import coloredlogs
 import uvicorn
 import uvicorn.config
+import uvicorn.workers
 from uvicorn.importer import import_from_string
 
 try:
@@ -32,6 +33,8 @@ LOG_FORMAT_PROD = '%(asctime)-15s | %(process)d | %(levelname)s | %(name)s | %(m
 CURRENT_DIRECTORY = Path(__file__).parent
 
 
+## CONFIGURATION
+
 def read_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser()
     config.read(CURRENT_DIRECTORY / "default_config.ini")
@@ -39,11 +42,26 @@ def read_config() -> configparser.ConfigParser:
     return config
 
 
-def get_workers(config):
+def get_worker_count(config):
     if "worker" not in config:
         return min(8, multiprocessing.cpu_count())
     return int(config["worker"])
 
+def parse_args(app_name = ""):
+    parser = argparse.ArgumentParser(description=app_name)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--production', dest='production', action='store_true',
+                       help='Run in production mode')
+    group.add_argument('--profile', type=str, dest='profile_filename',
+                       help='Run cProfile in developpment mode and record the a .prof file',
+                       default=None)
+    return parser.parse_args()
+
+
+## GLOBAL VARIABLES
+
+ARGS = parse_args()
+CONFIG = read_config()
 
 ## LOGGING
 
@@ -92,9 +110,12 @@ def configure_app(app):
     app.on_event("startup")(configure_logging)
 
 
-## RUN PRODUCTION
+## RUN GUNICORN (production)
 
 if gunicorn:
+    class UvicornWorker(uvicorn.workers.UvicornWorker):
+        CONFIG_KWARGS = {"root_path": CONFIG["server"]["root_path"] }
+
     class StubbedGunicornLogger(Logger):
         def setup(self, cfg):
             configure_logging()
@@ -126,11 +147,11 @@ if gunicorn:
     def run_gunicorn(config, app_name, args):
         options = {
             "bind": "%s:%s" % (config["host"], config["port"]),
-            "workers": get_workers(config),
+            "workers": get_worker_count(config),
             "accesslog": "-",
             "errorlog": "-",
             "logger_class": StubbedGunicornLogger,
-            "worker_class": "uvicorn.workers.UvicornWorker",
+            "worker_class": "ebiodiv.server.UvicornWorker",
             "default_proc_name": config.get("default_proc_name", "gunicorn"),
             "keyfile": config.get("ssl_keyfile"),
             "certfile": config.get("ssl_certfile"),
@@ -138,7 +159,7 @@ if gunicorn:
         StandaloneApplication(app_name, options).run()
 
 
-## RUN DEBUG
+## RUN UVICORN (dev or production on Windows)
 
 @contextmanager
 def profile_context(profile_filename):
@@ -187,6 +208,7 @@ def run_uvicorn(config, app_name, args):
     uvicorn_kwargs = dict(
         host=config["host"],
         port=int(config["port"]),
+        root_path=config["root_path"],
         log_level="debug",
         log_config=uvicorn_logging_config,
         access_log=True,
@@ -197,7 +219,7 @@ def run_uvicorn(config, app_name, args):
     if args.production:
         uvicorn.run(
             app_name,
-            workers = get_workers(config),
+            workers = get_worker_count(config),
             **uvicorn_kwargs
         )
     elif not args.profile_filename:
@@ -216,17 +238,6 @@ def run_uvicorn(config, app_name, args):
 
 ## RUN
 
-def parse_args(app_name = ""):
-    parser = argparse.ArgumentParser(description=app_name)
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--production', dest='production', action='store_true',
-                       help='Run in production mode')
-    group.add_argument('--profile', type=str, dest='profile_filename',
-                       help='Run cProfile in developpment mode and record the a .prof file',
-                       default=None)
-    return parser.parse_args()
-
-
 def run(app_name):
     args = parse_args(app_name)
     configure_logging()
@@ -234,7 +245,3 @@ def run(app_name):
         run_gunicorn(CONFIG["server"], app_name, args)
     else:
         run_uvicorn(CONFIG["server"], app_name, args)
-
-
-ARGS = parse_args()
-CONFIG = read_config()
