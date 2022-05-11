@@ -5,6 +5,7 @@ import logging
 import multiprocessing
 import argparse
 import cProfile
+from pathlib import Path
 from os import path
 from contextlib import contextmanager
 
@@ -18,6 +19,7 @@ try:
     import gunicorn.app.base
     from gunicorn.glogging import Logger
 except ImportError:
+    # gunicorn doesn't work on Windows
     gunicorn = None
 
 
@@ -27,11 +29,13 @@ LOG_FORMAT_DEBUG = '%(levelname)-7s %(name)-30.30s: %(message)s'
 # Production
 LOG_FORMAT_PROD = '%(asctime)-15s | %(process)d | %(levelname)s | %(name)s | %(message)s'
 
+CURRENT_DIRECTORY = Path(__file__).parent
 
-def read_config(default_config) -> configparser.ConfigParser:
+
+def read_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser()
-    config.read_string(default_config)
-    config.read("server.ini")
+    config.read(CURRENT_DIRECTORY / "default_config.ini")
+    config.read(CURRENT_DIRECTORY.parent / "config.ini")
     return config
 
 
@@ -44,9 +48,9 @@ def get_workers(config):
 ## LOGGING
 
 def configure_logging():
-    global args
-    log_level = "INFO" if args.production else "DEBUG"
-    log_format = LOG_FORMAT_PROD if args.production else LOG_FORMAT_DEBUG
+    global ARGS
+    log_level = "INFO" if ARGS.production else "DEBUG"
+    log_format = LOG_FORMAT_PROD if ARGS.production else LOG_FORMAT_DEBUG
 
     logging.getLogger("asyncio").setLevel(logging.ERROR)
 
@@ -72,7 +76,7 @@ def configure_logging():
     if sys.platform == 'win32':
         isatty = False
     else:
-        isatty = not args.production
+        isatty = not ARGS.production
     coloredlogs.install(
         level=log_level,
         level_styles=level_styles,
@@ -223,13 +227,14 @@ def parse_args(app_name = ""):
     return parser.parse_args()
 
 
-def run(config, app_name):
+def run(app_name):
     args = parse_args(app_name)
     configure_logging()
     if args.production and gunicorn:
-        run_gunicorn(config, app_name, args)
+        run_gunicorn(CONFIG["server"], app_name, args)
     else:
-        run_uvicorn(config, app_name, args)
+        run_uvicorn(CONFIG["server"], app_name, args)
 
 
-args = parse_args()
+ARGS = parse_args()
+CONFIG = read_config()

@@ -1,11 +1,11 @@
 # How to run
 
 ```
-pip install -r requirements.txt
-python app.py --production
+pip install -e .
+ebiodiv-backend --production  # or python -m ebiodiv --production
 ```
 
-Create a `server.ini` file to configured the server:
+Create a `config.ini` file to configured the server:
 
 ```ini
 [server]
@@ -25,7 +25,7 @@ timeout=180
 # Development
 
 ```
-usage: app.py [-h] [--production | --profile PROFILE_FILENAME]
+usage: python -m ebiodiv [-h] [--production | --profile PROFILE_FILENAME]
 
 optional arguments:
   -h, --help            show this help message and exit

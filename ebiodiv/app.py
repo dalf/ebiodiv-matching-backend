@@ -15,28 +15,15 @@ from logging import Logger
 
 import diskmap
 import matchingalgorithm
-import server
-import utils
+from . import server
+from . import utils
 
 
 logger = logging.getLogger(__name__)
 
+CONFIG = server.CONFIG
 MATCHING_DB = diskmap.DiskMap("matching.lmdb")
 HTTP_SESSION: aiohttp.ClientSession = None
-CONFIG = server.read_config("""
-[server]
-root_path=/
-host=localhost
-port=8888
-default_proc_name=ebiodiv
-# worker=8
-# ssl_keyfile=
-# ssl_certfile=
-
-[datasource]
-url=https://tb.plazi.org/GgServer/gbifOccLinkData/
-timeout=180
-""")
 DATASOURCE = CONFIG["datasource"]
 
 app = FastAPI(
@@ -160,7 +147,7 @@ def _add_score(data) -> None:
         _add_score_on_chunk(normalized_occ_dict, data["occurrenceRelations"])
         return
 
-    # a lot of relations: use a process pool (~1.6 seconds for 5000 relations)
+    # a lot of relations: use a process pool
     chunk_size = max(100, int(len(data["occurrenceRelations"]) / utils.get_worker_count()) + 1)
     chunks = utils.chunked(data["occurrenceRelations"], chunk_size)
     data["occurrenceRelations"] = utils.pool_map(_add_score_on_chunk, chunks, normalized_occ_dict)
@@ -227,7 +214,3 @@ async def add_matching(matchingInput: List[OccurrenceMatching]):
 async def occurrence_relations(data = Body(default=None, example="""{"body":{"occurrenceRelations":[{"occurrenceKey1":20,"occurrenceKey2":42,"decision":null},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":true},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":false}]}}""")):
     async with HTTP_SESSION.post(DATASOURCE["url"] + "occurrenceRelations", json=data) as response:
         return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
-
-
-if __name__ == "__main__":
-    server.run(CONFIG["server"], "app:app")
