@@ -3,6 +3,8 @@ from itertools import chain, islice
 from multiprocessing import Pool
 from typing import List, Iterator, TypeVar, Generator, Tuple
 from collections.abc import Callable
+from timeit import default_timer
+from contextlib import contextmanager
 
 
 __all__ = ['chunked', 'pool_map', 'get_worker_count']
@@ -32,6 +34,11 @@ def _worker_wrapper(t):
     return f(*g['__args'], chunk, **g['__kwargs'])
 
 
+def _init_worker(args, kwargs):
+    globals()['__args'] = args
+    globals()['__kwargs'] = kwargs
+
+
 # def pool_map(f: Callable[..., List[T]], chunk_list: Iterator[List[T]], *args, **kwargs) -> List[T]:
 def pool_map(f, chunk_list, *args, **kwargs):
     """Equivalent of multiprocessing.Pool.map() but allows additional arguments (*args and **kwargs).
@@ -55,19 +62,22 @@ def pool_map(f, chunk_list, *args, **kwargs):
     >>> return result
 
     """
-    def init_worker():
-        globals()['__args'] = args
-        globals()['__kwargs'] = kwargs
-
     results = []
 
     worker_data: List[Tuple[Callable[..., List[T]], List[T]]] = [(f, chunk) for chunk in chunk_list]
 
     with Pool(
         processes=min(get_worker_count(), len(worker_data)),
-        initializer=init_worker,
+        initializer=_init_worker,
+        initargs=(args, kwargs),
     ) as p:
         for chunk in p.map(_worker_wrapper, worker_data):
             results.extend(chunk)
 
     return results
+
+
+@contextmanager
+def measure_time():
+    start = default_timer()
+    yield lambda: default_timer() - start

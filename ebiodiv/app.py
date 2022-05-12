@@ -9,6 +9,7 @@ import orjson
 import aiohttp
 from fastapi import FastAPI, Request, Response, Body, Query
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 from logging import Logger
@@ -28,7 +29,6 @@ app = FastAPI(
     version="2.0.0",
     docs_url="/",
     redoc_url=None,
-    root_path=CONFIG["server"]["root_path"],
     default_response_class=ORJSONResponse,
     swagger_ui_parameters={"syntaxHighlight": False},
     description="""
@@ -40,10 +40,6 @@ app = FastAPI(
 but add scoring between the occurrences</p>
 """,
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-
-server.configure_app(app)
 
 
 async def catch_exceptions_middleware(request: Request, call_next):
@@ -63,6 +59,19 @@ async def catch_exceptions_middleware(request: Request, call_next):
 
 app.middleware("http")(catch_exceptions_middleware)
 
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+server.configure_app(app)
 
 async def on_request_end(session, trace_config_ctx, params):
     logger.info(f"\"{params.method} {params.url}\" {params.response.status} {params.response.headers.get('content-length', '')}")
@@ -75,7 +84,9 @@ async def startup_event():
     trace_config = aiohttp.TraceConfig()
     trace_config.on_request_end.append(on_request_end)
     timeout = aiohttp.ClientTimeout(float(DATASOURCE["timeout"]))
-    HTTP_SESSION = aiohttp.ClientSession(trace_configs=[trace_config], timeout=timeout)
+    HTTP_SESSION = aiohttp.ClientSession(trace_configs=[trace_config], timeout=timeout, headers={
+        'User-Agent': 'ebiodiv-backend'
+    })
 
 
 @app.on_event("shutdown")
@@ -87,6 +98,21 @@ class Fields(BaseModel):
     __root__: Dict[str, List[str]]
 
 
+async def proxy_response(url, **kwargs):
+    with utils.measure_time() as now:
+        async with HTTP_SESSION.get(url, **kwargs) as response:
+            content = await response.read()
+            http_time = now()
+            return Response(
+                content,
+                status_code=response.status,
+                media_type=response.headers["Content-Type"],
+                headers = {
+                    'server-timing': 'http;dur=' + str(http_time * 1000)
+                }
+            )
+
+
 @app.get("/fields", response_model=Fields, description="List of fields", tags=["meta"])
 async def get_fields():
     result = {column_name: [column_name] for column_name in matchingalgorithm.FIELDS}
@@ -96,14 +122,12 @@ async def get_fields():
 
 @app.get("/institutionList", description="basic list of institutions, including datasets", tags=["data"])
 async def get_institutionList():
-    async with HTTP_SESSION.get(DATASOURCE["url"] + "institutionList") as response:
-        return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+    return await proxy_response(DATASOURCE["url"] + "institutionList")
 
 
 @app.get("/institutions", description="list of full institution record", tags=["data"])
 async def get_institutions():
-    async with HTTP_SESSION.get(DATASOURCE["url"] + "institutions") as response:
-        return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+    return await proxy_response(DATASOURCE["url"] + "institutions")
 
 
 @app.get("/datasets", description="list of datasets", tags=["data"])
@@ -111,8 +135,7 @@ async def get_datasets(institutionKey: Optional[str] = None):
     params = {}
     if institutionKey:
         params["institutionKey"] = institutionKey
-    async with HTTP_SESSION.get(DATASOURCE["url"] + "datasets", params=params) as response:
-        return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+    return await proxy_response(DATASOURCE["url"] + "institutions", params=params)
 
 
 def get_relation_id(occurrenceKey1, occurrenceKey2):
@@ -140,7 +163,7 @@ def _add_score(data) -> None:
         normalized_occ_dict[int(occ_key)] = normalized_occ
 
     # few relations: sync call
-    if len(data["occurrenceRelations"]) < 200:
+    if len(data["occurrenceRelations"]) < 200 or True:
         _add_score_on_chunk(normalized_occ_dict, data["occurrenceRelations"])
         return
 
@@ -167,25 +190,53 @@ async def get_occurrences(
         params["occurrenceKeys"] = occurrenceKeys
     if fetchMissing is not None:
         params["fetchMissing"] = "true" if fetchMissing else "false"
-    async with HTTP_SESSION.get(DATASOURCE["url"] + "occurrences", params=params) as response:
-        if response.status != 200:
-            # error: proxy the response
-            return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
 
-        content = await response.read()
+    timings = {}
+
+    with utils.measure_time() as now:
+        async with HTTP_SESSION.get(DATASOURCE["url"] + "occurrences", params=params) as response:
+            if response.status != 200:
+                # error: proxy the response
+                return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+
+            content = await response.read()
+    timings['http'] = now()
+
+    with utils.measure_time() as now:
         # orjson.loads(content) takes a few seconds on a large documents (>10MB).
         data = orjson.loads(content)
+    timings['json_loads'] = now()
 
-        # add matching
-        for relation in data["occurrenceRelations"]:
-            relation_id = get_relation_id(relation["occurrenceKey1"], relation["occurrenceKey2"])
-            relation["matching"] = MATCHING_DB.get(relation_id, {"match": None, "timestamp": None, "comment": None})
+    # add matching
+    for relation in data["occurrenceRelations"]:
+        relation_id = get_relation_id(relation["occurrenceKey1"], relation["occurrenceKey2"])
+        relation["matching"] = MATCHING_DB.get(relation_id, {"match": None, "timestamp": None, "comment": None})
 
-        # add scores
+    # add scores
+    with utils.measure_time() as now:
         if scores:
             await asyncio.get_event_loop().run_in_executor(None, _add_score, data)
+    timings['scoring'] = now()
 
-        return ORJSONResponse(data)
+    # serialize JSON
+    with utils.measure_time() as now:
+        content = orjson.dumps(data)
+    timings['json_dumps'] = now()
+
+    # output
+    timings_values = [
+        name + ';dur=' + str(round(value * 1000, 3))
+        for name, value in timings.items()
+    ]
+
+    return Response(
+        orjson.dumps(data),
+        status_code=response.status,
+        media_type="application/json",
+        headers = {
+            'server-timing': ', '.join(timings_values)
+        }
+    )
 
 
 class OccurrenceMatching(BaseModel):

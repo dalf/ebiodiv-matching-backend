@@ -12,12 +12,12 @@ from contextlib import contextmanager
 import coloredlogs
 import uvicorn
 import uvicorn.config
-import uvicorn.workers
 from uvicorn.importer import import_from_string
 
 try:
     import gunicorn
     import gunicorn.app.base
+    import uvicorn.workers
     from gunicorn.glogging import Logger
 except ImportError:
     # gunicorn doesn't work on Windows
