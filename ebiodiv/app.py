@@ -135,7 +135,7 @@ async def get_datasets(institutionKey: Optional[str] = None):
     params = {}
     if institutionKey:
         params["institutionKey"] = institutionKey
-    return await proxy_response(DATASOURCE["url"] + "institutions", params=params)
+    return await proxy_response(DATASOURCE["url"] + "datasets", params=params)
 
 
 def get_relation_id(occurrenceKey1, occurrenceKey2):
