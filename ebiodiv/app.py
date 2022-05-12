@@ -1,21 +1,19 @@
-import logging
 import asyncio
-import multiprocessing
-from time import time
+import logging
 from itertools import chain, islice
+from logging import Logger
+from time import time
 from typing import Dict, List, Optional, Union
 
-import orjson
 import aiohttp
-from fastapi import FastAPI, Request, Response, Body, Query
+import orjson
+from fastapi import Body, FastAPI, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
-from starlette.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
-from logging import Logger
+from starlette.middleware.cors import CORSMiddleware
 
 from . import diskmap, matchingalgorithm, server, utils
-
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +142,7 @@ def get_relation_id(occurrenceKey1, occurrenceKey2):
     return str(relation_keys[0]) + "," + str(relation_keys[1])
 
 
-def _add_score_on_chunk(normalized_occ_dict, chunk: List[Dict]) -> List[Dict]:
+def _add_score_on_chunk(normalized_occ_dict, chunk: List[Dict] = None) -> List[Dict]:
     # get the scores from the normalized occurrences
     # leave the original occurrences untouched
     for relation in chunk:
@@ -162,15 +160,7 @@ def _add_score(data) -> None:
         matchingalgorithm.normalize_occurrence(normalized_occ)
         normalized_occ_dict[int(occ_key)] = normalized_occ
 
-    # few relations: sync call
-    if len(data["occurrenceRelations"]) < 200 or True:
-        _add_score_on_chunk(normalized_occ_dict, data["occurrenceRelations"])
-        return
-
-    # a lot of relations: use a process pool
-    chunk_size = max(100, int(len(data["occurrenceRelations"]) / utils.get_worker_count()) + 1)
-    chunks = utils.chunked(data["occurrenceRelations"], chunk_size)
-    data["occurrenceRelations"] = utils.pool_map(_add_score_on_chunk, chunks, normalized_occ_dict)
+    _add_score_on_chunk(normalized_occ_dict, data["occurrenceRelations"])
 
 
 @app.get("/occurrences", description="list of occurrences", tags=["data"])
