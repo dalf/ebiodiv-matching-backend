@@ -7,9 +7,10 @@ from typing import Dict, List, Optional, Union
 
 import aiohttp
 import orjson
-from fastapi import Body, FastAPI, Query, Request, Response
+from fastapi import Body, FastAPI, APIRouter, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import ORJSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 
@@ -24,7 +25,8 @@ DATASOURCE = CONFIG["datasource"]
 app = FastAPI(
     title="eBioDiv - Backend API",
     version="2.0.0",
-    docs_url="/",
+    docs_url="/api/v2/",
+    openapi_url="/api/v2/openapi.json",
     redoc_url=None,
     default_response_class=ORJSONResponse,
     swagger_ui_parameters={"syntaxHighlight": False},
@@ -37,6 +39,8 @@ app = FastAPI(
 but add scoring between the occurrences</p>
 """,
 )
+
+api_router = APIRouter(prefix="/api/v2")
 
 
 async def catch_exceptions_middleware(request: Request, call_next):
@@ -110,24 +114,24 @@ async def proxy_response(url, method='get', **kwargs):
             )
 
 
-@app.get("/fields", response_model=Fields, description="List of fields", tags=["meta"])
+@api_router.get("/fields", response_model=Fields, description="List of fields", tags=["meta"])
 async def get_fields():
     result = {column_name: [column_name] for column_name in matchingalgorithm.FIELDS}
     result.update({column_names[0]: list(column_names) for column_names in matchingalgorithm.MULTI_FIELDS})
     return result
 
 
-@app.get("/institutionList", description="basic list of institutions, including datasets", tags=["data"])
+@api_router.get("/institutionList", description="basic list of institutions, including datasets", tags=["data"])
 async def get_institutionList():
     return await proxy_response(DATASOURCE["url"] + "institutionList")
 
 
-@app.get("/institutions", description="list of full institution record", tags=["data"])
+@api_router.get("/institutions", description="list of full institution record", tags=["data"])
 async def get_institutions():
     return await proxy_response(DATASOURCE["url"] + "institutions")
 
 
-@app.get("/datasets", description="list of datasets", tags=["data"])
+@api_router.get("/datasets", description="list of datasets", tags=["data"])
 async def get_datasets(institutionKey: Optional[str] = None):
     params = {}
     if institutionKey:
@@ -152,7 +156,7 @@ def _add_score(data) -> None:
     return data
 
 
-@app.get("/occurrences", description="list of occurrences", tags=["data"])
+@api_router.get("/occurrences", description="list of occurrences", tags=["data"])
 async def get_occurrences(
     institutionKey: Optional[str] = None,
     datasetKey: Optional[str] = None,
@@ -224,6 +228,10 @@ async def get_occurrences(
     )
 
 
-@app.post("/occurrenceRelations", description='Update the "match" value between occurrences', tags=["matching"])
+@api_router.post("/occurrenceRelations", description='Update the "match" value between occurrences', tags=["matching"])
 async def occurrence_relations(data = Body(default=None, example="""{"occurrenceRelations":[{"occurrenceKey1":20,"occurrenceKey2":42,"decision":null},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":true},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":false}]}""")):
     return await proxy_response(DATASOURCE["url"] + "datasets", method='post', json=data)
+
+
+app.include_router(api_router)
+app.mount("/", StaticFiles(directory="static"), name="static")
