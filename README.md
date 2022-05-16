@@ -34,4 +34,14 @@ optional arguments:
                         Run cProfile in developpment mode and record the a .prof file
 ```
 
-With the `--production` option, the server starts in debug mode.
+## debug
+
+Without either option `--production` or option `--profile` option, the server starts in debug mode: enable auto-reload (content referenced by .gitignore is ignored).
+
+## profiling
+
+```
+pip install snakeviz
+ebiodiv-backend --profile test.prof
+snakeviz ./test.prof
+```
