@@ -13,12 +13,11 @@ from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 
-from . import diskmap, matchingalgorithm, server, utils
+from . import matchingalgorithm, server, utils
 
 logger = logging.getLogger(__name__)
 
 CONFIG = server.CONFIG
-MATCHING_DB = diskmap.DiskMap("matching.lmdb")
 HTTP_SESSION: aiohttp.ClientSession = None
 DATASOURCE = CONFIG["datasource"]
 
@@ -96,9 +95,9 @@ class Fields(BaseModel):
     __root__: Dict[str, List[str]]
 
 
-async def proxy_response(url, **kwargs):
+async def proxy_response(url, method='get', **kwargs):
     with utils.measure_time() as now:
-        async with HTTP_SESSION.get(url, **kwargs) as response:
+        async with getattr(HTTP_SESSION, method)(url, **kwargs) as response:
             content = await response.read()
             http_time = now()
             return Response(
@@ -106,7 +105,7 @@ async def proxy_response(url, **kwargs):
                 status_code=response.status,
                 media_type=response.headers["Content-Type"],
                 headers = {
-                    'server-timing': 'http;dur=' + str(http_time * 1000)
+                    'server-timing': 'http;dur=' + str(round(http_time * 1000))
                 }
             )
 
@@ -136,22 +135,6 @@ async def get_datasets(institutionKey: Optional[str] = None):
     return await proxy_response(DATASOURCE["url"] + "datasets", params=params)
 
 
-def get_relation_id(occurrenceKey1, occurrenceKey2):
-    relation_keys = [int(occurrenceKey1), int(occurrenceKey2)]
-    relation_keys.sort()
-    return str(relation_keys[0]) + "," + str(relation_keys[1])
-
-
-def _add_score_on_chunk(normalized_occ_dict, chunk: List[Dict] = None) -> List[Dict]:
-    # get the scores from the normalized occurrences
-    # leave the original occurrences untouched
-    for relation in chunk:
-        o1 = normalized_occ_dict[relation["occurrenceKey1"]]
-        o2 = normalized_occ_dict[relation["occurrenceKey2"]]
-        relation["scores"] = matchingalgorithm.get_scores(o1, o2)
-    return chunk
-
-
 def _add_score(data) -> None:
     # normalized a copy of the occurrences
     normalized_occ_dict = {}
@@ -160,7 +143,13 @@ def _add_score(data) -> None:
         matchingalgorithm.normalize_occurrence(normalized_occ)
         normalized_occ_dict[int(occ_key)] = normalized_occ
 
-    _add_score_on_chunk(normalized_occ_dict, data["occurrenceRelations"])
+    # get the scores from the normalized occurrences
+    # leave the original occurrences untouched
+    for relation in data["occurrenceRelations"]:
+        o1 = normalized_occ_dict[relation["occurrenceKey1"]]
+        o2 = normalized_occ_dict[relation["occurrenceKey2"]]
+        relation["scores"] = matchingalgorithm.get_scores(o1, o2)
+    return data
 
 
 @app.get("/occurrences", description="list of occurrences", tags=["data"])
@@ -185,9 +174,18 @@ async def get_occurrences(
 
     with utils.measure_time() as now:
         async with HTTP_SESSION.get(DATASOURCE["url"] + "occurrences", params=params) as response:
-            if response.status != 200:
+            if response.status != 200 or not scores:
                 # error: proxy the response
-                return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+                content = await response.read()
+                http_time = now()
+                return Response(
+                    content,
+                    status_code=response.status,
+                    media_type=response.headers["Content-Type"],
+                    headers = {
+                        'server-timing': 'http;dur=' + str(round(http_time * 1000))
+                    }
+                )
 
             content = await response.read()
     timings['http'] = now()
@@ -196,11 +194,6 @@ async def get_occurrences(
         # orjson.loads(content) takes a few seconds on a large documents (>10MB).
         data = orjson.loads(content)
     timings['json_loads'] = now()
-
-    # add matching
-    for relation in data["occurrenceRelations"]:
-        relation_id = get_relation_id(relation["occurrenceKey1"], relation["occurrenceKey2"])
-        relation["matching"] = MATCHING_DB.get(relation_id, {"match": None, "timestamp": None, "comment": None})
 
     # add scores
     with utils.measure_time() as now:
@@ -213,7 +206,9 @@ async def get_occurrences(
         content = orjson.dumps(data)
     timings['json_dumps'] = now()
 
-    # output
+    # output server-timing HTTP header
+    # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Server-Timing
+    # https://twitter.com/firefoxdevtools/status/1201914691863244800
     timings_values = [
         name + ';dur=' + str(round(value * 1000, 3))
         for name, value in timings.items()
@@ -229,26 +224,6 @@ async def get_occurrences(
     )
 
 
-class OccurrenceMatching(BaseModel):
-    occurrenceKey1: Union[str, int]
-    occurrenceKey2: Union[str, int]
-    match: bool = False
-    comment: Optional[str] = None
-
-
-@app.post("/matching", description='Update the "match" value between two occurrences. ⚠️ DEPRECATED use /occurrenceRelations', tags=["matching"])
-async def add_matching(matchingInput: List[OccurrenceMatching]):
-    now = int(time())
-    response = []
-    for item in matchingInput:
-        relation_id = get_relation_id(item.occurrenceKey1, item.occurrenceKey2)
-        data = {"match": item.match, "comment": item.comment, "timestamp": now}
-        MATCHING_DB[relation_id] = data
-        response.append({"occurrenceKey1": item.occurrenceKey1, "occurrenceKey2": item.occurrenceKey2, **data})
-    return response
-
-
 @app.post("/occurrenceRelations", description='Update the "match" value between occurrences', tags=["matching"])
-async def occurrence_relations(data = Body(default=None, example="""{"body":{"occurrenceRelations":[{"occurrenceKey1":20,"occurrenceKey2":42,"decision":null},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":true},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":false}]}}""")):
-    async with HTTP_SESSION.post(DATASOURCE["url"] + "occurrenceRelations", json=data) as response:
-        return Response(await response.read(), status_code=response.status, media_type=response.headers["Content-Type"])
+async def occurrence_relations(data = Body(default=None, example="""{"occurrenceRelations":[{"occurrenceKey1":20,"occurrenceKey2":42,"decision":null},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":true},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":false}]}""")):
+    return await proxy_response(DATASOURCE["url"] + "datasets", method='post', json=data)
