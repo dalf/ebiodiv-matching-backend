@@ -234,4 +234,4 @@ async def occurrence_relations(data = Body(default=None, example="""{"occurrence
 
 
 app.include_router(api_router)
-app.mount("/", StaticFiles(directory="static"), name="static")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
