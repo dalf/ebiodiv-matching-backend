@@ -230,7 +230,7 @@ async def get_occurrences(
 
 @api_router.post("/occurrenceRelations", description='Update the "match" value between occurrences', tags=["matching"])
 async def occurrence_relations(data = Body(default=None, example="""{"occurrenceRelations":[{"occurrenceKey1":20,"occurrenceKey2":42,"decision":null},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":true},{"occurrenceKey1":20,"occurrenceKey2":42,"decision":false}]}""")):
-    return await proxy_response(DATASOURCE["url"] + "datasets", method='post', json=data)
+    return await proxy_response(DATASOURCE["url"] + "occurrenceRelations", method='post', json=data)
 
 
 app.include_router(api_router)
